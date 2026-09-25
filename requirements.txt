@@ -1,0 +1,8 @@
+# CPU (this machine):
+#   pip install -r requirements.txt
+# GPU (the other machine):
+#   pip install -r requirements.txt && pip install -U "jax[cuda12]"
+jax>=0.4.30
+numpy
+scikit-learn
+matplotlib
