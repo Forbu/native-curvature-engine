@@ -90,26 +90,38 @@ def forward(P, x):
 
     def dense(i, u):
         u2 = u.reshape(-1, u.shape[-1])
-        As.append((u2.T @ u2) / u2.shape[0])    # A = E[x x^T], exact
+        A = (u2.T @ u2) / u2.shape[0]           # A = E[x x^T], exact
         l = lin[i]
-        return u @ l["W"].T + (0.0 if l["b"] is None else l["b"])
+        y = u @ l["W"].T + (0.0 if l["b"] is None else l["b"])
+        return y, A
 
     idx = 1
     shp = (D // N_HEAD)
+
     for li in range(N_LAYER):
-        a = dense(idx, rms(h, norms[2 * li])); idx += 1
-        q, k_, v = jnp.split(a, 3, -1)
-        sh = lambda t: t.reshape(B, T, N_HEAD, -1).transpose(0, 2, 1, 3)
-        q, k_, v = sh(q), sh(k_), sh(v)
-        att = q @ k_.transpose(0, 1, 3, 2) / np.sqrt(shp)
-        att = jnp.where(jnp.tril(jnp.ones((T, T), bool))[None, None], att, -1e30)
-        att = jax.nn.softmax(att, -1)
-        o = (att @ v).transpose(0, 2, 1, 3).reshape(B, T, -1)
-        h = h + dense(idx, o); idx += 1
-        m = jax.nn.gelu(dense(idx, rms(h, norms[2 * li + 1])), approximate=True)
-        idx += 1
-        h = h + dense(idx, m); idx += 1
-    logits = dense(idx, rms(h, norms[2 * N_LAYER]))
+        @jax.checkpoint                           # remat: ~30% slower, tiny mem
+        def block_(h_, idx=idx, li=li):
+            a, A1 = dense(idx, rms(h_, norms[2 * li]))
+            q, k_, v = jnp.split(a, 3, -1)
+            sh = lambda t: t.reshape(B, T, N_HEAD, -1).transpose(0, 2, 1, 3)
+            q, k_, v = sh(q), sh(k_), sh(v)
+            att = q @ k_.transpose(0, 1, 3, 2) / np.sqrt(shp)
+            att = jnp.where(jnp.tril(jnp.ones((T, T), bool))[None, None],
+                            att, -1e30)
+            att = jax.nn.softmax(att, -1)
+            o = (att @ v).transpose(0, 2, 1, 3).reshape(B, T, -1)
+            o1, A2 = dense(idx + 1, o)
+            h2 = h_ + o1
+            m_, A3 = dense(idx + 2, rms(h2, norms[2 * li + 1]))
+            m = jax.nn.gelu(m_, approximate=True)
+            p1, A4 = dense(idx + 3, m)
+            return h2 + p1, (A1, A2, A3, A4)
+
+        h, As_blk = block_(h)
+        As.extend(As_blk)
+        idx += 4
+    logits, A_head = dense(idx, rms(h, norms[2 * N_LAYER]))
+    As.append(A_head)
     return logits, As
 
 def loss_fn(P, x, y):

@@ -68,3 +68,35 @@ STEPS=6000 ~/nce-venv/bin/python gpt_gpu.py # full comparison
 ```
 
 Logs: `logs/gpt_main.log`, `logs/gpt_nc.log`.
+
+---
+
+# Scale-up: 12 layers · d=768 · 12 heads (~85M params)
+
+Same data/protocol (TinyStories, TF32 matmuls, grad-clip 1.0, wd 0.01,
+rematerialized blocks, batch 64 — batch 128 OOMs the 24GB L4 without remat).
+**5000 steps = 82M tokens**. Note: the originally requested LRs (AdamW 3e-3,
+Hyb 1e-2) were miscalibrated at this scale — AdamW@3e-3 plateaued at val
+≈2.33 (near-unigram; see `logs/gpt768_hotlr.log`) — so both optimizers got a
+small fair grid instead.
+
+| optimizer | lr | val @5000 | ms/step | wall-clock |
+|---|---|---|---|---|
+| AdamW | 3e-4 | 0.5817 | 830 | 69 min |
+| AdamW | 1e-3 | 0.6453 | 825 | 69 min |
+| **HybridSOAP** | **1e-3** | **0.5467** | 1474 | 123 min |
+| HybridSOAP | 3e-3 | 0.6572 @2080 (studio suspended mid-run) | 1464 | — |
+
+## Headline
+
+**At 85M params the result flips: HybridSOAP beats AdamW by 6% val loss
+(0.5467 vs 0.5817)** — even paying 1.8× wall-clock per step. At 3.2M params
+AdamW won (0.676 vs 0.783); preconditioning needed the scale, exactly as the
+SOAP literature suggests. The GGN input factor `A = E[x xᵀ]` (the engine's
+contribution) is doing this inside a two-sided SOAP skeleton — no curvature
+backprop needed, one `XᵀX` GEMM per linear per step.
+
+Caveats: single seed, single fair-ish grid (3e-4 may not be AdamW's optimum —
+no 1e-4 point), Hyb@3e-3 incomplete, val loss at fixed steps (not fixed
+wall-clock: on wall-clock AdamW reaches 0.58 at 69 min while Hyb needs ~110+
+min for 0.55).
