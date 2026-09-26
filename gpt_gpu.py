@@ -18,8 +18,12 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
-N_LAYER, D, N_HEAD, CTX = 4, 256, 4, 256
+N_LAYER = int(os.environ.get("N_LAYER", "4"))
+D = int(os.environ.get("D", "256"))
+N_HEAD = D // 64
+CTX = 256
 BATCH = int(os.environ.get("BATCH", "128"))
+jax.config.update("jax_default_matmul_precision", "tensorfloat32")
 STEPS = int(os.environ.get("STEPS", "3000"))
 LOG_EVERY, WARMUP = 250, 100
 
